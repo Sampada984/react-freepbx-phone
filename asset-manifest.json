@@ -1,15 +1,15 @@
 {
   "files": {
     "main.css": "/react-freepbx-phone/static/css/main.db8be198.css",
-    "main.js": "/react-freepbx-phone/static/js/main.3934fecd.js",
+    "main.js": "/react-freepbx-phone/static/js/main.e41be0bb.js",
     "static/js/453.7a0d5503.chunk.js": "/react-freepbx-phone/static/js/453.7a0d5503.chunk.js",
     "index.html": "/react-freepbx-phone/index.html",
     "main.db8be198.css.map": "/react-freepbx-phone/static/css/main.db8be198.css.map",
-    "main.3934fecd.js.map": "/react-freepbx-phone/static/js/main.3934fecd.js.map",
+    "main.e41be0bb.js.map": "/react-freepbx-phone/static/js/main.e41be0bb.js.map",
     "453.7a0d5503.chunk.js.map": "/react-freepbx-phone/static/js/453.7a0d5503.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.db8be198.css",
-    "static/js/main.3934fecd.js"
+    "static/js/main.e41be0bb.js"
   ]
 }
