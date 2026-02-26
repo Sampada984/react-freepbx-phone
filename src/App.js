@@ -2,6 +2,9 @@ import React, { useRef, useState } from "react";
 import { UserAgent, Registerer, Inviter } from "sip.js";
 
 export default function App() {
+const HOSTNAME_WS = "wss://test3-localedge:8089/ws";
+const IP_WS = "wss://10.255.109.39:8089/ws";
+const SIP_DOMAIN = "10.255.109.39";
 
   const uaRef = useRef(null);
   const registererRef = useRef(null);
@@ -15,7 +18,6 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [dialNumber, setDialNumber] = useState("");
 
-  const server = "wss://test2-localedge:8089/ws";
 
   const log = (msg) => {
     const time = new Date().toLocaleTimeString();
@@ -46,16 +48,31 @@ export default function App() {
   }
 
   function addCall(session, direction) {
-    const call = {
-      id: session.id,
-      session,
-      direction,
-      state: "Ringing"
-    };
 
-    sessionsRef.current.set(session.id, session);
-    setCalls(prev => [...prev, call]);
-  }
+  // Extract extension (works for incoming & outgoing)
+  let extension = "";
+console.log({session});
+
+  try {
+    if (direction === "incoming") {
+      extension = session.remoteIdentity.uri.user;
+    } else {
+      extension = session.request.to.uri.user;
+    }
+  } catch (e) {}
+
+  const call = {
+    id: session.id,
+    session,
+    direction,
+    state: "Ringing",
+    extension
+  };
+
+  sessionsRef.current.set(session.id, session);
+  setCalls(prev => [...prev, call]);
+}
+
 
   function removeCall(session) {
     sessionsRef.current.delete(session.id);
@@ -104,52 +121,91 @@ export default function App() {
 
   /* ----------------------- START PHONE ---------------------- */
 
-  async function startPhone() {
+async function startPhone() {
 
-    const uri = UserAgent.makeURI("sip:9000@test2-localedge");
+  async function attempt(serverUrl, label) {
+    try {
 
-    const userAgent = new UserAgent({
-      uri,
-      transportOptions: { server },
-      authorizationUsername: "9000",
-      authorizationPassword: "abc123"
-    });
+      log(`Trying to connect...`);
 
-    uaRef.current = userAgent;
-
-    userAgent.delegate = {
-      onInvite: (invitation) => {
-
-        log("Incoming call");
-
-        addCall(invitation, "incoming");
-
-        invitation.stateChange.addListener((state) => {
-
-          log(`Incoming: ${state}`);
-
-          if (state === "Established") {
-            activeSessionRef.current = invitation;
-            attachAudio(invitation);
-            updateCallState(invitation.id, "Active");
-          }
-
-          if (state === "Terminated") {
-            removeCall(invitation);
-          }
-        });
+      // destroy old UA if retrying
+      if (uaRef.current) {
+        try { await uaRef.current.stop(); } catch {}
+        uaRef.current = null;
       }
-    };
 
-    await userAgent.start();
+      const uri = UserAgent.makeURI(`sip:9000@${SIP_DOMAIN}`);
 
-    const registerer = new Registerer(userAgent);
-    registererRef.current = registerer;
+      const userAgent = new UserAgent({
+        uri,
+        transportOptions: {
+          server: serverUrl,
+          connectionTimeout: 4000,
+          traceSip: true
+        },
+        authorizationUsername: "9000",
+        authorizationPassword: "abc123"
+      });
 
-    await registerer.register();
+      uaRef.current = userAgent;
 
-    log("Registered to PBX");
+      /* ---------- INCOMING CALL HANDLER ---------- */
+
+      userAgent.delegate = {
+        onInvite: (invitation) => {
+
+          log(`Incoming call from ${invitation.remoteIdentity.uri.user}`);
+
+          // add to UI call list
+          addCall(invitation, "incoming");
+
+          invitation.stateChange.addListener((state) => {
+
+            log(`Incoming: ${state}`);
+
+            if (state === "Established") {
+              activeSessionRef.current = invitation;
+              attachAudio(invitation);
+              updateCallState(invitation.id, "Active");
+            }
+
+            if (state === "Terminated") {
+              removeCall(invitation);
+            }
+          });
+        }
+      };
+
+      /* ---------- START + REGISTER ---------- */
+
+      await userAgent.start();
+
+      const registerer = new Registerer(userAgent);
+      registererRef.current = registerer;
+
+      await registerer.register();
+
+      log(`Registered successfully`);
+      return true;
+
+    } catch (err) {
+      log(`Registration failed`);
+      console.error(err);
+      return false;
+    }
   }
+
+  // 1️⃣ Try hostname first (works on Windows)
+  const ok = await attempt(HOSTNAME_WS, "hostname");
+
+  // 2️⃣ Tablets will automatically land here
+  if (!ok) {
+    log("Retrying connection...");
+    await attempt(IP_WS, "IP");
+  }
+}
+
+
 
   /* ----------------------- ANSWER ---------------------- */
 
@@ -217,11 +273,36 @@ export default function App() {
   /* ----------------------- HANGUP ---------------------- */
 
   function hangup(session) {
-    if (!session) return;
+  if (!session) return;
 
-    if (session.bye) session.bye();
-    else session.cancel();
+  const state = session.state;
+  log(`Hangup pressed. Session state: ${state}`);
+
+  try {
+
+    // INCOMING call not answered yet
+    if (state === "Initial" && session.reject) {
+      session.reject(); // sends 486 Busy Here
+      return;
+    }
+
+    // OUTGOING call still ringing
+    if (state === "Establishing" && session.cancel) {
+      session.cancel(); // sends CANCEL
+      return;
+    }
+
+    // Active call
+    if (state === "Established" && session.bye) {
+      session.bye(); // sends BYE
+      return;
+    }
+
+  } catch (err) {
+    console.error("Hangup error:", err);
   }
+}
+
 
   /* ----------------------- UI ---------------------- */
 
@@ -306,13 +387,20 @@ export default function App() {
             border:"1px solid #ccc",
             padding:"10px",
             margin:"10px 0",
-            borderRadius:"10px"
+            borderRadius:"10px",
           }}>
 
-          <div><b>{call.direction.toUpperCase()}</b></div>
+          <div>
+  <b>
+    {call.direction === "incoming"
+      ? `INCOMING (${call.extension})`
+      : `OUTGOING (${call.extension})`}
+  </b>
+</div>
+
           <div>Status: {call.state}</div>
 
-          {call.state === "Ringing" &&
+          {(call.state === "Ringing" && call.direction !== 'outgoing') &&
             <button style={{...btn, background:"#2e8b57", color:"white"}}
               onClick={() => answerCall(call.session)}>
               Answer
